@@ -3,13 +3,18 @@ import pandas as pd
 import joblib
 from pathlib import Path
 import sys
+from urllib.parse import urlparse
 
 
 # --------------------------------------------------
-# Find the src folder
+# Find project files
 # --------------------------------------------------
 
-sys.path.append(str(Path(__file__).parent / "src"))
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "model" / "phishing_url_model.pkl"
+
+SRC_DIR = BASE_DIR / "src"
+sys.path.insert(0, str(SRC_DIR))
 
 from feature_extraction import extract_features
 
@@ -18,7 +23,10 @@ from feature_extraction import extract_features
 # Load trained model
 # --------------------------------------------------
 
-MODEL_PATH = Path("model/phishing_url_model.pkl")
+if not MODEL_PATH.exists():
+    st.error("The trained model file was not found.")
+    st.info("Check that model/phishing_url_model.pkl exists.")
+    st.stop()
 
 model = joblib.load(MODEL_PATH)
 
@@ -33,16 +41,16 @@ st.set_page_config(
     layout="centered"
 )
 
-
-# --------------------------------------------------
-# Header
-# --------------------------------------------------
-
 st.title("🛡️ Phishing URL Detector")
 
 st.write(
-    "A machine learning system that analyzes URL characteristics "
+    "A machine learning tool that analyzes URL characteristics "
     "and predicts whether a URL is likely to be legitimate or phishing."
+)
+
+st.caption(
+    "Educational tool only. A prediction does not guarantee that "
+    "a website is safe or malicious."
 )
 
 st.divider()
@@ -63,7 +71,6 @@ with col2:
 with col3:
     st.metric("Model", "Decision Tree")
 
-
 st.divider()
 
 
@@ -79,6 +86,30 @@ url = st.text_input(
 )
 
 
+def is_valid_url(value):
+    """Check for a basic, well-formed web URL."""
+    value = value.strip()
+
+    if not value or any(char.isspace() for char in value):
+        return False
+
+    candidate = value if "://" in value else "https://" + value
+
+    try:
+        parsed = urlparse(candidate)
+        hostname = parsed.hostname
+
+        return (
+            parsed.scheme in ("http", "https")
+            and hostname is not None
+            and "." in hostname
+            and not hostname.startswith(".")
+            and not hostname.endswith(".")
+        )
+    except ValueError:
+        return False
+
+
 # --------------------------------------------------
 # Prediction
 # --------------------------------------------------
@@ -86,80 +117,68 @@ url = st.text_input(
 if st.button("🔍 Analyze URL", use_container_width=True):
 
     if not url.strip():
-
         st.warning("Please enter a URL first.")
 
+    elif not is_valid_url(url):
+        st.warning(
+            "Please enter a valid web address, such as "
+            "https://example.com."
+        )
+
     else:
+        try:
+            features = extract_features(url.strip())
+            feature_df = pd.DataFrame([features])
 
-        # Extract URL features
-        features = extract_features(url)
+            prediction = model.predict(feature_df)[0]
+            probabilities = model.predict_proba(feature_df)[0]
+            estimated_probability = probabilities[prediction] * 100
 
-        # Convert features into DataFrame
-        feature_df = pd.DataFrame([features])
+            st.divider()
+            st.subheader("📊 Detection Result")
 
-        # Make prediction
-        prediction = model.predict(feature_df)[0]
+            if prediction == 1:
+                st.error("🚨 LIKELY PHISHING")
+                st.write(
+                    "The model classified this URL as likely phishing. "
+                    "Avoid entering sensitive information unless you "
+                    "have independently verified the website."
+                )
+            else:
+                st.success("✅ CLASSIFIED AS LIKELY LEGITIMATE")
+                st.write(
+                    "The model classified this URL as likely legitimate. "
+                    "This does not guarantee that the website is safe."
+                )
 
-        # Get model probabilities
-        probabilities = model.predict_proba(feature_df)[0]
+            st.metric(
+                "Model Probability for This Prediction",
+                f"{estimated_probability:.2f}%"
+            )
 
-        confidence = probabilities[prediction] * 100
+            st.caption(
+                "This percentage is the model's estimated probability "
+                "for its predicted class, not a guarantee of correctness."
+            )
 
+            st.subheader("🔍 URL Feature Analysis")
 
-        st.divider()
+            feature_display = pd.DataFrame({
+                "Feature": feature_df.columns,
+                "Value": feature_df.iloc[0].values
+            })
 
+            st.dataframe(
+                feature_display,
+                use_container_width=True,
+                hide_index=True
+            )
 
-        # --------------------------------------------------
-        # Prediction result
-        # --------------------------------------------------
-
-        st.subheader("📊 Detection Result")
-
-        if prediction == 1:
-
+        except Exception:
             st.error(
-                "🚨 PHISHING URL DETECTED"
+                "The URL could not be analyzed. Please check the input "
+                "and try again."
             )
-
-            st.write(
-                "The machine learning model classified this URL "
-                "as likely phishing."
-            )
-
-        else:
-
-            st.success(
-                "✅ LEGITIMATE URL"
-            )
-
-            st.write(
-                "The machine learning model classified this URL "
-                "as likely legitimate."
-            )
-
-
-        st.metric(
-            "Model Confidence",
-            f"{confidence:.2f}%"
-        )
-
-
-        # --------------------------------------------------
-        # Feature analysis
-        # --------------------------------------------------
-
-        st.subheader("🔍 URL Feature Analysis")
-
-        feature_display = pd.DataFrame({
-            "Feature": feature_df.columns,
-            "Value": feature_df.iloc[0].values
-        })
-
-        st.dataframe(
-            feature_display,
-            use_container_width=True,
-            hide_index=True
-        )
 
 
 # --------------------------------------------------
@@ -167,23 +186,20 @@ if st.button("🔍 Analyze URL", use_container_width=True):
 # --------------------------------------------------
 
 st.divider()
-
 st.subheader("ℹ️ About This Project")
 
 st.write(
-    """
-    This project uses machine learning to detect potentially phishing
-    URLs based on characteristics such as URL length, number of dots,
-    suspicious words, IP addresses, HTTPS usage, and subdomains.
-    """
+    "This project uses machine learning to analyze URL characteristics "
+    "such as URL length, dots, suspicious words, IP-address patterns, "
+    "HTTPS usage, and subdomains."
 )
 
 st.write(
     "**Final Model:** Decision Tree  \n"
     "**Dataset:** 235,370 URLs  \n"
     "**Engineered Features:** 11  \n"
-    "**Test Accuracy:** 99.49%  \n"
-    "**F1 Score:** 99.40%"
+    "**Reported Test Accuracy:** 99.49%  \n"
+    "**Reported F1 Score:** 99.40%"
 )
 
 st.caption(
